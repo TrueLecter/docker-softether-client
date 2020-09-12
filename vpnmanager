@@ -1,0 +1,166 @@
+#!/bin/bash
+
+DEBUG=1
+VPNCMD="./vpncmd"
+VPNCLIENT="./vpnclient"
+VPN_ADAPTER="vpn"
+STATIC=""
+NETMASK="/24"
+GATEWAY=""
+
+account=""
+selfname=$(basename $0)
+
+display_help () {
+    echo "Usage: ./$selfname"
+    echo "  -h --help       Display this help and exit"
+    echo "  -c --account    Import and connect to passed account"
+    echo "     --vpncmd     Set vpncmd location. Default: $VPNCMD"
+    echo "     --vpnclient  Set vpnclient location. Default: $VPNCLIENT"
+    echo "  -a --adapter    Set vitrual adapter name. Default: $VPN_ADAPTER"
+    echo "  -s --static     Set static ip address. If empty, DHCP is used instead"
+    echo "  -n --netmask    Set netmask for static address. Default $NETMASK"
+    echo "  -g --gateway    Set static gateway."
+}
+
+run () {
+    if [ "$DEBUG" = 1 ]; then
+        echo "$*"
+    else
+        /bin/sh -c "$*"
+    fi
+}
+
+resolve_ip () {
+    #if is ip return ip
+    echo `getent hosts $1 | awk '{print $1}'`
+}
+
+set_routes () {
+    ip route replace "$1/32" via "$2" dev "$3"
+}
+
+res=$($VPNCLIENT start)
+
+if [ "$?" -ne "0" ]; then
+    echo "Unable to start vpnclient: $res"
+    exit 3
+else 
+    sleep 2
+fi
+
+if [ "$#" = 0 ]; then
+    echo "Not enough arguments"
+    echo ""
+    display_help
+    exit 1
+fi
+
+
+while [ "$1" != "" ]; do
+    case $1 in
+        -c | --account )        
+            shift
+            account=$1
+        ;;
+
+        -a | --adapter )        
+            shift
+            VPN_ADAPTER=$1
+        ;;
+
+        --vpncmd )              
+            shift
+            VPNCMD=$1
+        ;;
+
+        --vpnclient )              
+            shift
+            VPNCLIENT=$1
+        ;;
+        
+        -h | --help )           
+            display_help
+            exit 0
+        ;;
+
+        * )
+            echo "Unknown argument $1"
+            echo ""
+            display_help
+            exit 1
+    esac
+    shift
+done
+
+if [ "$account" = "" ]; then
+    echo "Account can not be empty!"
+    exit 2
+fi
+
+echo "$account" > /opt/softether/account.vpn
+
+account_name=$(cat /opt/softether/account.vpn | grep AccountName | awk '{print $3}')
+
+if [ ! -f "/dev/vpn_$VPN_ADAPTER" ]; then
+    res=$($VPNCMD localhost /CLIENT /CMD NicCreate $VPN_ADAPTER)
+
+    if [ "$?" -ne "0" ]; then
+        echo "Failed to create virtual adapted. May be try privileged mode?\n$res"
+        exit 4
+    fi
+fi
+
+cd /opt/softether
+
+#cat << _EOT_ >> /opt/softether/commands.in
+#_EOT_
+res=$($VPNCMD localhost /CLIENT /CMD AccountImport account.vpn)
+
+if [ "$?" -ne 0 ]; then
+    echo "Error importing account: $res"
+fi
+
+res=$($VPNCMD localhost /CLIENT /CMD AccountConnect $account_name)
+
+if [ "$?" -ne 0 ]; then
+    echo "Error connecting to the account: $res"
+fi
+
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+if [ "$account" = "" ]; then
+    # TODO Handle raw options
+    echo "Non account connection is not implemented yet"
+    exit 7
+else
+    host=`grep Hostname account.vpn | awk '{ print $3 }' | sed "s/[^[:digit:][:alpha:].-]//g"`
+    ip=$(getent hosts "$host" | awk '{ print $1 }')
+    echo "resolved to $ip"
+    default_route=$(ip route show | grep default)
+    default_gw=$(echo "$default_route" | awk '{ print $3 }')
+    default_dev=$(echo "$default_route" | awk '{ print $5 }')
+
+    set_routes "$ip" "$default_gw" "$default_dev"
+fi
+
+if [ "$STATIC" = "" ]; then
+    # patch dhclient-script to to move resolv.conf, but to directly edit it
+    mv /sbin/dhclient-script /sbin/dhclient-script.old
+    sed 's/mv -f \$new_resolv_conf \$resolv_conf/cat \$new_resolv_conf > \/etc\/resolv.conf\nrm -f \$new_resolv_conf/' /sbin/dhclient-script.old > /sbin/dhclient-script
+    chmod +x /sbin/dhclient-script
+    dhclient -v "vpn_$VPN_ADAPTER"
+else
+    if [ "$GATEWAY" = "" ]; then
+        echo "Gateway cannot be empty!"
+        exit 5;
+    fi
+
+    ip addr add "$STATIC$NETMASK" dev eth0
+    ip route add default via $GATEWAY
+fi
+
+vpn_gw=$(grep 'routers' /var/lib/dhcp/dhclient.leases | awk '{ print substr($3, 1, length($3)-1) }')
+ip route replace default via "$vpn_gw" dev "vpn_$VPN_ADAPTER" metric 1
+
+/bin/bash
