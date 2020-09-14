@@ -1,30 +1,101 @@
 #!/bin/bash
-
 DEBUG=1
+
 VPNCMD="./vpncmd"
 VPNCLIENT="./vpnclient"
+
+# Adapter settings
 VPN_ADAPTER="vpn"
+MAC=""
 STATIC=""
 NETMASK="/24"
 GATEWAY=""
 
+# Connection settings
+HOST=""
+PORT="5555"
+HUB="DEFAULT"
+AUTH="pass"
+USERNAME=""
+PASSWORD=""
+CERT=""
+
+# Advanced settings
+RECONNECT_COUNT="999"
+RECONNECT_INTERVAL="15"
+
+SSL30="0"
+TCP_CONNECTIONS="8"
+TCP_INTERVAL="1"
+TCP_LIFETIME=""
+HALF_DUPLEX="0"
+NO_QOS="0"
+NO_ENCRYPT="0"
+COMPRESS="0"
+NO_UDP="1"
+BRIDGE="0"
+MONITORING="0"
+NO_ROUTING="0"
+
+# Proxy Settings
+PROXY_TYPE=""
+PROXY_HOST=""
+PROXY_PORT="8080"
+PROXY_USER=""
+PROXY_PASS=""
+
 account=""
-selfname=$(basename $0)
 
 display_help () {
-    echo "Usage: ./$selfname"
-    echo "  -h --help       Display this help and exit"
-    echo "  -c --account    Import and connect to passed account"
-    echo "     --vpncmd     Set vpncmd location. Default: $VPNCMD"
-    echo "     --vpnclient  Set vpnclient location. Default: $VPNCLIENT"
-    echo "  -a --adapter    Set vitrual adapter name. Default: $VPN_ADAPTER"
-    echo "  -s --static     Set static ip address. If empty, DHCP is used instead"
-    echo "  -n --netmask    Set netmask for static address. Default $NETMASK"
-    echo "  -g --gateway    Set static gateway."
+    echo "Usage:"
+    echo "     --help         Display this help and exit"
+    echo " CONNECTION SETTINGS:"
+    echo "  -c --connection   Import and connect to exported connection from vpncmd."
+    echo "                    Other options will be ignored if specified"
+    echo "  -h --host         VPN server hostname"
+    echo "  -p --port         VPN server port. Default $PORT"
+    echo "  -H --hub          VPN server hub. Default $HUB"
+    echo "  -a --auth         Auth type. One of anon, pass, radius, cert. Default: $AUTH"
+    echo "  -U --username     Account name"
+    echo "  -P --password     Account password if auth = \"pass\" or auth = \"radius\""
+    echo "  -C --cert         Client certificate string in x.509 followed by base64 encoded"
+    echo "                    private key if auth = \"cert\""
+    echo " ADVANCED SETTINGS:"
+    echo "     --r-interval   Reconnect interval. If set to less than 1, auto-reconnect"
+    echo "                    will be disabled. Defaults to $RECONNECT_INTERVAL"
+    echo "     --r-count      Reconnect count. If set to 999, reconnection will be"
+    echo "                    attempted infinetely. Defaults $RECONNECT_COUNT"
+    echo "     --ssl3         Use SSL 3.0"
+    echo "     --c-number     Number of TCP connections. Up to 32. Defaults to $TCP_CONNECTIONS"
+    echo "     --c-interval   Connection establishing interval. Defaults to $TCP_INTERVAL"
+    echo "     --c-lifetime   Connections lifetime. If empty connections will live forever"
+    echo "     --half-duplex  Use Half-Duplex Mode"
+    echo "     --no-voip-qos  Disable VoIP / QoS Functions"
+    echo "     --no-encrypt   Encrypt VPN Session with SSL"
+    echo "     --compress     Use Data Compression"
+    echo "     --no-udp       Disable UDP Acceleration"
+    echo "     --bridge       Bridge / Router Mode"
+    echo "     --monitoring   Monitoring Mode"
+    echo "     --no-routing   No Adjustments of Routing Table"
+    echo " PROXY SETTINGS:"
+    echo "     --proxy-type   Proxy type. Can be *empty*, HTTP, SOCKS4, SOCKS5"
+    echo "     --proxy-host   Proxy host"
+    echo "     --proxy-port   Proxy port. Defaults to $PROXY_PORT"
+    echo "     --proxy-user   Proxy username"
+    echo "     --proxy-pass   Proxy password"
+    echo " ADAPTER CONFIGURATION:"
+    echo "  -A --adapter      Vitrual adapter name. Default: $VPN_ADAPTER"
+    echo "     --mac          Virtual adapter mac. Defaults to random"
+    echo "  -s --static       Static ip address. If empty, DHCP is used instead"
+    echo "  -n --netmask      Netmask for static address. Ignored if static is empty. Default $NETMASK"
+    echo "  -g --gateway      Static gateway. Ignored if static is empty"
+    echo " MISC:"
+    echo "     --vpncmd       vpncmd binary location. Default: $VPNCMD"
+    echo "     --vpnclient    vpnclient binary location. Default: $VPNCLIENT"
 }
 
 run () {
-    if [ "$DEBUG" = 1 ]; then
+    if [ "$DEBUG" == 1 ]; then
         echo "$*"
     else
         /bin/sh -c "$*"
@@ -32,12 +103,21 @@ run () {
 }
 
 resolve_ip () {
-    #if is ip return ip
-    echo `getent hosts $1 | awk '{print $1}'`
+    if [[ "$1" =~ ^(([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))\.){3}([1-9]?[0-9]|1[0-9][0-9]|2([0-4][0-9]|5[0-5]))$ ]]; then
+        echo "$1"
+    else
+        echo `getent hosts $1 | awk '{print $1}'`
+    fi
 }
 
-set_routes () {
-    ip route replace "$1/32" via "$2" dev "$3"
+set_route_to_vpn () {
+    local ip=$(resolve_ip "$1")
+
+    local default_route=$(ip route show | grep default)
+    local default_gw=$(echo "$default_route" | awk '{ print $3 }')
+    local default_dev=$(echo "$default_route" | awk '{ print $5 }')
+
+    ip route replace "$ip/32" via "$default_gw" dev "$default_dev"
 }
 
 res=$($VPNCLIENT start)
@@ -45,7 +125,7 @@ res=$($VPNCLIENT start)
 if [ "$?" -ne "0" ]; then
     echo "Unable to start vpnclient: $res"
     exit 3
-else 
+else
     sleep 2
 fi
 
@@ -56,30 +136,181 @@ if [ "$#" = 0 ]; then
     exit 1
 fi
 
+ADVANCED_SETTINGS=""
 
 while [ "$1" != "" ]; do
     case $1 in
-        -c | --account )        
+        # Connection settings
+        -c | --connection )
             shift
             account=$1
         ;;
 
-        -a | --adapter )        
+        -h | --host )
+            shift
+            HOST=$1
+        ;;
+
+        -p | --port )
+            shift
+            PORT=$1
+        ;;
+
+        -H | --hub )
+            shift
+            HUB=$1
+        ;;
+
+        -a | --auth )
+            shift
+            AUTH=$1
+        ;;
+
+        -U | --username )
+            shift
+            USERNAME=$1
+        ;;
+
+        -P | --password )
+            shift
+            PASSWORD=$1
+        ;;
+
+        -C | --cert )
+            shift
+            CERT=$1
+            shift
+            PK=$1
+        ;;
+
+        # Advanced settings
+        --r-interval )
+            shift
+            RECONNECT_INTERVAL=$1
+        ;;
+
+        --r-count )
+            shift
+            RECONNECT_COUNT=$1
+        ;;
+
+        --ssl3 )
+            echo "--ssl3 no used as there no options to set it yet"
+        ;;
+
+        --c-number )
+            shift
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /MAXTCP:$1"
+        ;;
+
+        --c-interval )
+            shift
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /INTERVAL:$1"
+        ;;
+
+        --c-lifetime )
+            shift
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /TTL:$1"
+        ;;
+
+        --half-duplex )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /HALF:yes"
+        ;;
+
+        --no-voip-qos )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /NOQOS:yes"
+        ;;
+
+        --no-encrypt )
+            NO_ENCRYPT="1"
+        ;;
+
+        --compress )
+            COMPRESS="1"
+        ;;
+
+        --no-udp )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /DISABLEUDP:yes"
+        ;;
+
+        --bridge )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /BRIDGE:yes"
+        ;;
+
+        --monitoring )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /MONITOR:yes"
+        ;;
+
+        --no-routing )
+            ADVANCED_SETTINGS="$ADVANCED_SETTINGS /NOTRACK:yes"
+        ;;
+
+        #Proxy settings
+        --proxy-type )
+            shift
+            PROXY_TYPE=$1
+        ;;
+
+        --proxy-host )
+            shift
+            PROXY_HOST=$1
+        ;;
+
+        --proxy-port )
+            shift
+            PROXY_PORT=$1
+        ;;
+
+        --proxy-user )
+            shift
+            PROXY_USER=$1
+        ;;
+
+        --proxy-pass )
+            shift
+            PROXY_PASS=$1
+        ;;
+
+
+        # Adapter settings
+        -A | --adapter )
             shift
             VPN_ADAPTER=$1
         ;;
 
-        --vpncmd )              
+        --mac )
+            shift
+            MAC=$1
+        ;;
+
+        -s | --static )
+            shift
+            STATIC=$1
+        ;;
+
+        -n | --netmask )
+            shift
+            NETMASK=$1
+        ;;
+
+        -g | --gateway )
+            shift
+            GATEWAY=$1
+        ;;
+
+
+        # Misc settings
+        --vpncmd )
             shift
             VPNCMD=$1
         ;;
 
-        --vpnclient )              
+        --vpnclient )
             shift
             VPNCLIENT=$1
         ;;
-        
-        -h | --help )           
+
+        --help )
             display_help
             exit 0
         ;;
@@ -93,15 +324,7 @@ while [ "$1" != "" ]; do
     shift
 done
 
-if [ "$account" = "" ]; then
-    echo "Account can not be empty!"
-    exit 2
-fi
-
-echo "$account" > /opt/softether/account.vpn
-
-account_name=$(cat /opt/softether/account.vpn | grep AccountName | awk '{print $3}')
-
+# create adapter if not exist
 if [ ! -f "/dev/vpn_$VPN_ADAPTER" ]; then
     res=$($VPNCMD localhost /CLIENT /CMD NicCreate $VPN_ADAPTER)
 
@@ -111,14 +334,97 @@ if [ ! -f "/dev/vpn_$VPN_ADAPTER" ]; then
     fi
 fi
 
-cd /opt/softether
+echo 1 > /proc/sys/net/ipv4/ip_forward
 
-#cat << _EOT_ >> /opt/softether/commands.in
-#_EOT_
-res=$($VPNCMD localhost /CLIENT /CMD AccountImport account.vpn)
+if [ "$account" != "" ]; then
+    echo "$account" > /opt/softether/account.vpn
+    account_name=$(cat /opt/softether/account.vpn | grep AccountName | awk '{print $3}')
 
-if [ "$?" -ne 0 ]; then
-    echo "Error importing account: $res"
+    cd /opt/softether
+
+    res=$($VPNCMD localhost /CLIENT /CMD AccountImport account.vpn)
+
+    if [ "$?" -ne 0 ]; then
+        echo "Error importing account: $res"
+        exit 2
+    fi
+
+    host=`grep Hostname account.vpn | awk '{ print $3 }' | sed "s/[^[:digit:][:alpha:].-]//g"`
+    set_route_to_vpn "$host"
+else
+    echo "AccountCreate vpn /SERVER:$HOST:$PORT /HUB:$HUB /USERNAME:$USERNAME /NICNAME:$VPN_ADAPTER" > commands.in
+
+    if [ "$PROXY_TYPE" != "" ]; then
+        case "$PROXY_TYPE" in
+            HTTP )
+                echo "AccountProxyHttp vpn /SERVER:$PROXY_HOST:$PROXY_PORT /USERNAME:$PROXY_USER /PASSWORD:$PROXY_PASS" >> commands.in
+            ;;
+
+            SOCKS4 )
+                echo "AccountProxySocks vpn /SERVER:$PROXY_HOST:$PROXY_PORT /USERNAME:$PROXY_USER /PASSWORD:$PROXY_PAS" >> commands.in
+            ;;
+
+            SOCKS5 )
+                echo "AccountProxySocks5 vpn /SERVER:$PROXY_HOST:$PROXY_PORT /USERNAME:$PROXY_USER /PASSWORD:$PROXY_PAS" >> commands.in
+            ;;
+
+            * )
+                echo "Unknown auth type $AUTH"
+                echo ""
+                display_help
+                exit 3
+        esac
+    fi
+
+    if [ "$MAC" != "" ]; then
+        echo "NicSetSetting $ADAPTER /MAC:$MAC" >> commands.in
+    fi
+
+    case "$AUTH" in
+        anon )
+            echo "AccountAnonymousSet vpn" >> commands.in
+        ;;
+
+        pass )
+            echo "AccountPasswordSet vpn /PASSWORD:$PASSWORD /TYPE:standard" >> commands.in
+        ;;
+
+        cert )
+            echo "$CERT" > cert.crt
+            echo "$PK" > pk.pk
+            echo "AccountCertSet vpn /LOADCERT:cert.crt /LOADKEY:pk.pk" >> commands.in
+        ;;
+
+        radius )
+            echo "AccountPasswordSet vpn /PASSWORD:$PASSWORD /TYPE:radius" >> commands.in
+        ;;
+
+        * )
+            echo "Unknown auth type $AUTH"
+            echo ""
+            display_help
+            exit 3
+    esac
+
+    if [ "$ADVANCED_SETTINGS" != "" ]; then
+        echo "AccountDetailSet vpn $ADVANCED_SETTINGS" >> commands.in
+    fi
+
+    echo "AccountRetrySet vpn /NUM:$RECONNECT_COUNT /INTERVAL:$RECONNECT_INTERVAL" >> commands.in
+
+    if [ "$NO_ENCRYPT" == "" ]; then
+        echo "AccountEncryptEnable vpn" >> commands.in
+    else
+        echo "AccountEncryptDisable vpn" >> commands.in
+    fi
+
+    if [ "$COMPRESS" == "" ]; then
+        echo "AccountCompressDisable vpn" >> commands.in
+    else
+        echo "AccountCompressEnable vpn" >> commands.in
+    fi
+
+    $VPNCMD localhost /CLIENT /IN:commands.in
 fi
 
 res=$($VPNCMD localhost /CLIENT /CMD AccountConnect $account_name)
@@ -127,33 +433,16 @@ if [ "$?" -ne 0 ]; then
     echo "Error connecting to the account: $res"
 fi
 
-echo 1 > /proc/sys/net/ipv4/ip_forward
-
-if [ "$account" = "" ]; then
-    # TODO Handle raw options
-    echo "Non account connection is not implemented yet"
-    exit 7
-else
-    host=`grep Hostname account.vpn | awk '{ print $3 }' | sed "s/[^[:digit:][:alpha:].-]//g"`
-    ip=$(getent hosts "$host" | awk '{ print $1 }')
-    echo "resolved to $ip"
-    default_route=$(ip route show | grep default)
-    default_gw=$(echo "$default_route" | awk '{ print $3 }')
-    default_dev=$(echo "$default_route" | awk '{ print $5 }')
-
-    set_routes "$ip" "$default_gw" "$default_dev"
-fi
-
-if [ "$STATIC" = "" ]; then
+if [ "$STATIC" == "" ]; then
     # patch dhclient-script to to move resolv.conf, but to directly edit it
     mv /sbin/dhclient-script /sbin/dhclient-script.old
     sed 's/mv -f \$new_resolv_conf \$resolv_conf/cat \$new_resolv_conf > \/etc\/resolv.conf\nrm -f \$new_resolv_conf/' /sbin/dhclient-script.old > /sbin/dhclient-script
     chmod +x /sbin/dhclient-script
     dhclient -v "vpn_$VPN_ADAPTER"
 else
-    if [ "$GATEWAY" = "" ]; then
+    if [ "$GATEWAY" == "" ]; then
         echo "Gateway cannot be empty!"
-        exit 5;
+        exit 6
     fi
 
     ip addr add "$STATIC$NETMASK" dev eth0
