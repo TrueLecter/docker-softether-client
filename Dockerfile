@@ -1,4 +1,4 @@
-FROM arm32v7/debian:stretch-slim as builder
+FROM debian:buster as builder
 WORKDIR /build/
 
 RUN apt update && apt install -y git-core git
@@ -9,9 +9,8 @@ RUN make -j8 -C build
 RUN mkdir /output/
 RUN cp build/libcedar.so build/libmayaqua.so build/hamcore.se2 build/vpnclient build/vpncmd /output/
 
-FROM arm32v7/debian:stretch-slim
+FROM debian:buster-slim
 WORKDIR /opt/softether/
-
 
 RUN apt update && apt install -y libncurses5 libreadline7 libtinfo5 libssl1.1 isc-dhcp-client iproute2\
 	&& rm -rf /tmp/* /var/tmp/* /var/cache/apk/* /var/cache/distfiles/*
@@ -20,5 +19,4 @@ COPY --from=builder /output/* /opt/softether/
 COPY ./vpnmanager /opt/softether/
 
 ENV LD_LIBRARY_PATH .
-#ENTRYPOINT ["/bin/sh", "-c", "/opt/softether/vpnclient start; /opt/softether/vpnmanager"]
 ENTRYPOINT ["/opt/softether/vpnmanager"]
