@@ -351,6 +351,8 @@ if [ "$account" != "" ]; then
 
     host=`grep Hostname account.vpn | awk '{ print $3 }' | sed "s/[^[:digit:][:alpha:].-]//g"`
     set_route_to_vpn "$host"
+
+    res=$($VPNCMD localhost /CLIENT /CMD AccountConnect $account_name)
 else
     echo "AccountCreate vpn /SERVER:$HOST:$PORT /HUB:$HUB /USERNAME:$USERNAME /NICNAME:$VPN_ADAPTER" > commands.in
 
@@ -424,10 +426,12 @@ else
         echo "AccountCompressEnable vpn" >> commands.in
     fi
 
+    echo "AccountConnect vpn" >> commands.in
+
+    set_route_to_vpn "$HOST"
+
     $VPNCMD localhost /CLIENT /IN:commands.in
 fi
-
-res=$($VPNCMD localhost /CLIENT /CMD AccountConnect $account_name)
 
 if [ "$?" -ne 0 ]; then
     echo "Error connecting to the account: $res"
