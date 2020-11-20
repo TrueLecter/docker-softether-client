@@ -457,7 +457,8 @@ else
 fi
 
 vpn_gw=$(grep 'routers' /var/lib/dhcp/dhclient.leases | awk '{ print substr($3, 1, length($3)-1) }')
-ip route replace default via "$vpn_gw" dev "vpn_$VPN_ADAPTER" metric 1
+ip route del default
+ip route add default via "$vpn_gw" dev "vpn_$VPN_ADAPTER" metric 1
 
 
 wait $service_pid
