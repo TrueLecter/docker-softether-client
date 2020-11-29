@@ -1,20 +1,45 @@
 #!/bin/sh
 
-RUN="no"
+RUN="yes"
 
 [ -f /var/run/vpnmanager-variables ] && . /var/run/vpnmanager-variables
 
 
-if [ "$RUN" = "yes" ]; then
+if [ "$RUN" = "yes" -a "$NO_ROUTING" = "0" ]; then
     if [ "$interface" = "vpn_$VPN_ADAPTER" ]; then
         case "$reason" in
             BOUND|RENEW|REBIND|REBOOT)
-                if [ -n "$new_domain_name_servers" ]; then
+                if [ "$new_domain_name_servers" != "$old_domain_name_servers" ]; then
+                    for old_nameserver in $old_domain_name_servers; do
+                        iptables -t nat -D OUTPUT -p tcp -m tcp --dport 53 -j DNAT --to-destination $old_nameserver:53 2>/dev/null
+                        iptables -t nat -D OUTPUT -p udp -m udp --dport 53 -j DNAT --to-destination $old_nameserver:53 2>/dev/null
+                    done
                     # TODO load balancing?
                     for nameserver in $new_domain_name_servers; do
                         iptables -t nat -A OUTPUT -p tcp -m tcp --dport 53 -j DNAT --to-destination $nameserver:53
-                        iptables -t nat -A OUTPUT -p 17 -m udp --dport 53 -j DNAT --to-destination $nameserver:53
+                        iptables -t nat -A OUTPUT -p udp -m udp --dport 53 -j DNAT --to-destination $nameserver:53
                         break
+                    done
+                fi
+
+                if [ "$new_routers" != "$old_routers" ]; then
+                    if_metric=1
+
+                    IFS='
+'
+
+                    for old_route in $(ip route | grep "$interface"); do
+                        ip route del $old_route
+                    done
+
+                    unset IFS
+
+                    for router in $new_routers; do
+                        ip route add default via $router dev $interface metric $if_metric
+
+                        if [ -n "$if_metric" ]; then
+                            if_metric=$((if_metric+1))
+                        fi
                     done
                 fi
             ;;

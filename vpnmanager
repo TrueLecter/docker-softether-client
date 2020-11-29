@@ -441,6 +441,7 @@ if [ "$?" -ne 0 ]; then
 fi
 
 echo "VPN_ADAPTER=\"$VPN_ADAPTER\"" > /var/run/vpnmanager-variables
+echo "NO_ROUTING=\"$NO_ROUTING\"" >> /var/run/vpnmanager-variables
 
 if [ "$STATIC" == "" ]; then
     # patch dhclient-script not to move resolv.conf, but to directly edit it
@@ -448,8 +449,12 @@ if [ "$STATIC" == "" ]; then
 
     default_route=$(ip route | grep default)
 
-    ip route del $default_route
-    ip route add $default_route metric 999
+    if [ "$NO_ROUTING" = "0" ]; then
+        ip route del $default_route
+        ip route add $default_route metric 999
+    else
+        sed -i 's/routers,//g; s/rfc3442-classless-static-routes,//g;' /etc/dhcp/dhclient.conf
+    fi
 
     dhclient -v "vpn_$VPN_ADAPTER"
 else
