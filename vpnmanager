@@ -440,11 +440,17 @@ if [ "$?" -ne 0 ]; then
     echo "Error connecting to the account: $res"
 fi
 
+echo "VPN_ADAPTER=\"$VPN_ADAPTER\"" > /var/run/vpnmanager-variables
+
 if [ "$STATIC" == "" ]; then
-    # patch dhclient-script to to move resolv.conf, but to directly edit it
-    mv /sbin/dhclient-script /sbin/dhclient-script.old
-    sed 's/mv -f \$new_resolv_conf \$resolv_conf/cat \$new_resolv_conf > \/etc\/resolv.conf\nrm -f \$new_resolv_conf/' /sbin/dhclient-script.old > /sbin/dhclient-script
-    chmod +x /sbin/dhclient-script
+    # patch dhclient-script not to move resolv.conf, but to directly edit it
+    sed -i 's/mv -f \$new_resolv_conf \$resolv_conf/cat \$new_resolv_conf > \/etc\/resolv.conf\nrm -f \$new_resolv_conf/' /sbin/dhclient-script
+
+    default_route=$(ip route | grep default)
+
+    ip route del $default_route
+    ip route add $default_route metric 999
+
     dhclient -v "vpn_$VPN_ADAPTER"
 else
     if [ "$GATEWAY" == "" ]; then
@@ -455,10 +461,5 @@ else
     ip addr add "$STATIC$NETMASK" dev eth0
     ip route add default via $GATEWAY
 fi
-
-vpn_gw=$(grep 'routers' /var/lib/dhcp/dhclient.leases | awk '{ print substr($3, 1, length($3)-1) }')
-ip route del default
-ip route add default via "$vpn_gw" dev "vpn_$VPN_ADAPTER" metric 1
-
 
 wait $service_pid

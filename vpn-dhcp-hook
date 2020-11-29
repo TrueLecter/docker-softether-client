@@ -1,0 +1,23 @@
+#!/bin/sh
+
+RUN="no"
+
+[ -f /var/run/vpnmanager-variables ] && . /var/run/vpnmanager-variables
+
+
+if [ "$RUN" = "yes" ]; then
+    if [ "$interface" = "vpn_$VPN_ADAPTER" ]; then
+        case "$reason" in
+            BOUND|RENEW|REBIND|REBOOT)
+                if [ -n "$new_domain_name_servers" ]; then
+                    # TODO load balancing?
+                    for nameserver in $new_domain_name_servers; do
+                        iptables -t nat -A OUTPUT -p tcp -m tcp --dport 53 -j DNAT --to-destination $nameserver:53
+                        iptables -t nat -A OUTPUT -p 17 -m udp --dport 53 -j DNAT --to-destination $nameserver:53
+                        break
+                    done
+                fi
+            ;;
+        esac
+    fi
+fi
